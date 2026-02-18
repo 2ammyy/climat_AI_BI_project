@@ -1,190 +1,278 @@
-
 import pandas as pd
+import numpy as np
+from pathlib import Path
+import warnings
 import mlflow
 import mlflow.sklearn
-import mlflow.prophet
-from xgboost import XGBClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, f1_score, classification_report
-from prophet import Prophet
-import warnings
-import os
-from pathlib import Path
-import mlflow
 
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import accuracy_score, f1_score, matthews_corrcoef
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+
+warnings.filterwarnings("ignore", category=UserWarning)
+
+PREPROCESSED_PATH = Path("data/merged_preprocessed.csv")
 mlflow.set_tracking_uri("http://localhost:5000")
 
-warnings.filterwarnings("ignore", category=FutureWarning)
+# ────────────────────────────────────────────────
+# 1. Data Loading & Proxy Label Generation
+# ────────────────────────────────────────────────
 
-# ────────────────────────────────────────────────
-# Paths
-# ────────────────────────────────────────────────
-PREPROCESSED_PATH = Path("data/merged_preprocessed.csv")
-
-# ────────────────────────────────────────────────
-# Training & Comparison
-# ────────────────────────────────────────────────
-def train_and_compare():
+def load_and_prepare_data():
     if not PREPROCESSED_PATH.exists():
-        raise FileNotFoundError(f"Preprocessed data not found: {PREPROCESSED_PATH}")
+        raise FileNotFoundError(f"File not found: {PREPROCESSED_PATH}")
 
-    print("Loading preprocessed data...")
     df = pd.read_csv(PREPROCESSED_PATH)
+    df['danger_label'] = df.get('danger_label', 0).astype(int)
+    y = df['danger_label'].values
 
-    # ────────────────────────────────────────────────
-    # Features & target (dynamic based on available columns)
-    # ────────────────────────────────────────────────
-    possible_features = [
-        'temp_max', 'temp_min', 'temp_hist', 'temp_scraped', 'feels_like_c_hist', 'feels_like_c_scraped',
-        'humidity_percent_hist', 'humidity_percent_scraped',
-        'precip_daily', 'precipprob_hist', 'precipprob_scraped',
-        'wind_speed_kmh_hist', 'wind_speed_kmh_scraped', 'wind_speed_mps',
-        'city_encoded', 'month', 'temp_max_lag1', 'precip_daily_lag1'
+    print("\n" + "═"*70)
+    print(" DATASET SUMMARY ".center(70))
+    print(f"Rows: {len(df):,}   Original positives: {y.sum()} ({y.mean():.4%})")
+
+    if y.sum() == 0:
+        print("No positives → generating proxy labels from weather description...")
+        rain_indicators = ['rain', 'shower', 'thunderstorm', 'drizzle', 'heavy']
+        mask = (
+            df['weather_main'].eq('Rain') |
+            df['weather_description'].str.contains('|'.join(rain_indicators), case=False, na=False)
+        )
+        df['danger_label'] = mask.astype(int)
+        y = df['danger_label'].values
+        print(f"→ Generated {y.sum()} positives ({y.mean():.4%})")
+
+    if y.sum() < 10:
+        raise ValueError("Too few positives — cannot train meaningfully")
+
+    pos_rate = y.mean()
+    print("═"*70 + "\n")
+    return df, y, pos_rate
+
+
+# ────────────────────────────────────────────────
+# 2. Feature Preparation with Fallbacks
+# ────────────────────────────────────────────────
+
+def prepare_features(df):
+    candidates = [
+        'temp_max', 'temp_min', 'temp_hist',
+        'humidity_percent_hist', 'precip_daily',
+        'wind_speed_kmh_hist', 'city_encoded',
+        'temp_max_lag1', 'precip_daily_lag1'
     ]
 
-    # Only keep features that exist in the DataFrame
-    features = [f for f in possible_features if f in df.columns]
+    fallback = {
+        'temp_max': 'temp_scraped',
+        'temp_min': 'temp_scraped',
+        'humidity_percent_hist': 'humidity_percent_scraped',
+        'wind_speed_kmh_hist': lambda d: d['wind_speed_mps'] * 3.6 if 'wind_speed_mps' in d else None,
+    }
+
+    features = []
+    for c in candidates:
+        if c in df.columns and df[c].notna().sum() > 20:
+            features.append(c)
+        elif c in fallback:
+            fb = fallback[c]
+            if isinstance(fb, str) and fb in df.columns and df[fb].notna().sum() > 20:
+                df[f"{c}_fb"] = df[fb]
+                features.append(f"{c}_fb")
+            elif callable(fb):
+                try:
+                    series = fb(df)
+                    if series.notna().sum() > 20:
+                        df[f"{c}_fb"] = series
+                        features.append(f"{c}_fb")
+                except:
+                    pass
 
     if not features:
-        raise ValueError("No valid features found in DataFrame. Available: " + str(df.columns.tolist()))
+        raise ValueError("No usable features found")
 
-    target = 'danger_label'
+    print(f"Features used ({len(features)}): {', '.join(features)}")
 
-    if target not in df.columns:
-        raise ValueError(f"Target column '{target}' not found. Available: {df.columns.tolist()}")
+    X = df[features].copy()
+    X = X.replace([np.inf, -np.inf], np.nan).fillna(X.median(numeric_only=True))
+    return X, features
 
-    print(f"Using features: {features}")
-    print(f"Target: {target}")
 
-    # Time-based split
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df = df.dropna(subset=['date'])
-    df = df.sort_values('date')
+# ────────────────────────────────────────────────
+# 3. Model Evaluation (safe mean calculation)
+# ────────────────────────────────────────────────
 
-    train_size = int(len(df) * 0.8)
-    train_df = df.iloc[:train_size]
-    test_df = df.iloc[train_size:]
+def evaluate_model(X, y, model_class, params, name, cv=5):
+    skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+    metrics = {'acc': [], 'f1': [], 'mcc': []}
 
-    X_train = train_df[features]
-    y_train = train_df[target]
-    X_test = test_df[features]
-    y_test = test_df[target]
+    print(f"\n→ {name}")
 
-    print(f"Train shape: {X_train.shape}, Test shape: {X_test.shape}")
+    for fold, (tr_idx, te_idx) in enumerate(skf.split(X, y), 1):
+        X_tr, X_te = X.iloc[tr_idx], X.iloc[te_idx]
+        y_tr, y_te = y[tr_idx], y[te_idx]
+
+        pos_te = y_te.sum()
+        if y_tr.sum() == 0 or pos_te < 2:  # skip if too few test positives
+            print(f"  Fold {fold} skipped (train+ {y_tr.sum()}, test+ {pos_te})")
+            continue
+
+        model = model_class(**params)
+        model.fit(X_tr, y_tr)
+
+        y_pred = model.predict(X_te)
+        acc = accuracy_score(y_te, y_pred)
+        f1 = f1_score(y_te, y_pred, zero_division=0)
+        mcc = matthews_corrcoef(y_te, y_pred)
+
+        metrics['acc'].append(acc)
+        metrics['f1'].append(f1)
+        metrics['mcc'].append(mcc)
+
+        print(f"  Fold {fold}  test+ {pos_te:2d}/{len(y_te)}   acc {acc:.4f}  f1 {f1:.4f}  mcc {mcc:+.4f}")
+
+    if not metrics['f1']:
+        print(f"  → {name} : no valid folds")
+        return {'mean_acc': 0.0, 'mean_f1': 0.0, 'mean_mcc': 0.0, 'std_f1': 0.0}
+
+    means = {k: np.mean(v) for k, v in metrics.items() if v}
+    std_f1 = np.std(metrics['f1']) if metrics['f1'] else 0.0
+
+    print(f"  → {name} CV summary ({len(metrics['f1'])} folds)")
+    print(f"     acc {means.get('acc', 0.0):.4f}   f1 {means.get('f1', 0.0):.4f}   mcc {means.get('mcc', 0.0):+.4f}")
+
+    return {
+        'mean_acc': means.get('acc', 0.0),
+        'mean_f1': means.get('f1', 0.0),
+        'mean_mcc': means.get('mcc', 0.0),
+        'std_f1': std_f1
+    }
+
+
+# ────────────────────────────────────────────────
+# 4. Main Training Logic
+# ────────────────────────────────────────────────
+
+def run_training():
+    df, y, pos_rate = load_and_prepare_data()
+    X, features = prepare_features(df)
+
+    scale_pos = min(max(1.0 / pos_rate, 1.0), 30.0)
+
+    models_config = {
+        "RandomForest": {
+            "cls": RandomForestClassifier,
+            "params": {
+                "n_estimators": 80,
+                "max_depth": 3,
+                "min_samples_leaf": 20,
+                "min_samples_split": 25,
+                "max_features": 0.4,
+                "class_weight": "balanced_subsample",
+                "random_state": 42,
+                "n_jobs": -1
+            }
+        },
+        "XGBoost": {
+            "cls": XGBClassifier,
+            "params": {
+                "n_estimators": 30,
+                "max_depth": 2,
+                "learning_rate": 0.04,
+                "subsample": 0.6,
+                "colsample_bytree": 0.6,
+                "scale_pos_weight": scale_pos,
+                "reg_alpha": 3.0,
+                "reg_lambda": 3.0,
+                "min_child_weight": 8,
+                "random_state": 42,
+                "eval_metric": "logloss",
+                "verbosity": 0
+            }
+        },
+        "LightGBM": {
+            "cls": LGBMClassifier,
+            "params": {
+                "n_estimators": 40,
+                "max_depth": 3,
+                "learning_rate": 0.05,
+                "subsample": 0.65,
+                "colsample_bytree": 0.65,
+                "is_unbalance": True,
+                "reg_alpha": 2.0,
+                "reg_lambda": 2.0,
+                "min_data_in_leaf": 25,
+                "min_sum_hessian_in_leaf": 12,
+                "random_state": 42,
+                "verbose": -1
+            }
+        }
+    }
 
     results = {}
-    best_f1 = -1
-    best_model_name = None
-    best_run_id = None
 
-    with mlflow.start_run(run_name="WeatherGuard_Comparison_v2"):
-        mlflow.log_param("train_size", len(train_df))
-        mlflow.log_param("test_size", len(test_df))
-        mlflow.log_param("features_used", features)
+    with mlflow.start_run(run_name=f"WeatherGuard_3M_pos{pos_rate:.3f}"):
+        mlflow.log_param("n_samples", len(y))
+        mlflow.log_param("pos_rate", pos_rate)
+        mlflow.log_param("n_positives", y.sum())
+        mlflow.log_param("features", features)
 
-        # Model 1: XGBoost
-        print("\nTraining XGBoost...")
-        xgb = XGBClassifier(n_estimators=150,learning_rate=0.08,max_depth=6,random_state=42,scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum() if (y_train == 1).sum() > 0 else 1)
-        xgb.fit(X_train, y_train)
-        y_pred_xgb = xgb.predict(X_test)
-        acc_xgb = accuracy_score(y_test, y_pred_xgb)
-        f1_xgb = f1_score(y_test, y_pred_xgb, zero_division=0)
-        results['XGBoost'] = {'accuracy': acc_xgb, 'f1': f1_xgb}
-        mlflow.log_metrics({"accuracy_xgb": acc_xgb, "f1_xgb": f1_xgb})
-        mlflow.sklearn.log_model(xgb, "xgboost_model")
-        mlflow.log_text(classification_report(y_test, y_pred_xgb), "xgboost_report.txt")
+        # Dummy baselines
+        for strat in ["most_frequent", "stratified"]:
+            res = evaluate_model(X, y, DummyClassifier, {"strategy": strat}, f"Dummy {strat}")
+            mlflow.log_metric(f"dummy_{strat}_f1", res['mean_f1'])
 
-        print(f"XGBoost → Acc: {acc_xgb:.4f} | F1: {f1_xgb:.4f}")
+        # Train real models
+        for name, cfg in models_config.items():
+            res = evaluate_model(X, y, cfg["cls"], cfg["params"], name)
+            results[name] = res
 
-        if f1_xgb > best_f1:
-            best_f1 = f1_xgb
-            best_model_name = "XGBoost"
-            best_run_id = mlflow.active_run().info.run_id
+            prefix = name.lower()[:3]
+            mlflow.log_metrics({
+                f"{prefix}_mean_acc": res['mean_acc'],
+                f"{prefix}_mean_f1": res['mean_f1'],
+                f"{prefix}_mean_mcc": res['mean_mcc'],
+                f"{prefix}_std_f1": res['std_f1']
+            })
 
-        # Model 2: RandomForest
-        print("\nTraining RandomForest...")
-        rf = RandomForestClassifier(n_estimators=150,max_depth=10,random_state=42,class_weight='balanced_subsample')
-        rf.fit(X_train, y_train)
-        y_pred_rf = rf.predict(X_test)
-        acc_rf = accuracy_score(y_test, y_pred_rf)
-        f1_rf = f1_score(y_test, y_pred_rf, zero_division=0)
-        results['RandomForest'] = {'accuracy': acc_rf, 'f1': f1_rf}
-        mlflow.log_metrics({"accuracy_rf": acc_rf, "f1_rf": f1_rf})
-        mlflow.sklearn.log_model(rf, "randomforest_model")
-        mlflow.log_text(classification_report(y_test, y_pred_rf), "randomforest_report.txt")
+        # Winner selection
+        winner_name = max(results, key=lambda k: results[k]['mean_f1'])
+        winner_res = results[winner_name]
 
-        print(f"RandomForest → Acc: {acc_rf:.4f} | F1: {f1_rf:.4f}")
+        mlflow.log_param("best_model", winner_name)
+        mlflow.log_metric("best_f1", winner_res['mean_f1'])
+        mlflow.log_metric("best_mcc", winner_res['mean_mcc'])
 
-        if f1_rf > best_f1:
-            best_f1 = f1_rf
-            best_model_name = "RandomForest"
-            best_run_id = mlflow.active_run().info.run_id
+        # Feature importances for winner (if supported)
+        if winner_name in models_config:
+            cfg = models_config[winner_name]
+            model = cfg["cls"](**cfg["params"])
+            model.fit(X, y)
+            if hasattr(model, 'feature_importances_'):
+                importances = model.feature_importances_
+                imp_dict = dict(zip(features, importances))
+                mlflow.log_dict(imp_dict, "feature_importances.json")
+                print("\nFeature importances (winner model):")
+                for f, imp in sorted(imp_dict.items(), key=lambda x: x[1], reverse=True):
+                    print(f"  {f:28} : {imp:.4f}")
 
-        # Model 3: Prophet (time-series forecast on precip_daily → derive danger)
-        print("\nTraining Prophet...")
-        prophet_df = train_df[['date', 'precip_daily']].dropna().rename(columns={'date': 'ds', 'precip_daily': 'y'})
+        print("\n" + "═"*70)
+        print(f" WINNER: {winner_name}")
+        print(f"  F1   = {winner_res['mean_f1']:.4f} (± {winner_res['std_f1']:.4f})")
+        print(f"  MCC  = {winner_res['mean_mcc']:+.4f}")
+        print("═"*70)
 
-        if len(prophet_df) < 2:
-            print("Prophet skipped: not enough valid data (need at least 2 rows)")
-            acc_prophet = 0
-            f1_prophet = 0
-        else:
-            prophet = Prophet(yearly_seasonality=True, weekly_seasonality=True, daily_seasonality=False)
-            prophet.fit(prophet_df)
+        # Example probabilities (on last 5 samples of full X)
+        print("\nExample probabilities (last 5 samples):")
+        print(model.predict_proba(X.iloc[-5:]))
 
-            future = prophet.make_future_dataframe(periods=len(test_df))
-            forecast = prophet.predict(future)
-            forecast_danger = (forecast['yhat'].iloc[-len(test_df):] > 60).astype(int)
-            acc_prophet = accuracy_score(y_test, forecast_danger)
-            f1_prophet = f1_score(y_test, forecast_danger, zero_division=0)
-
-        results['Prophet'] = {'accuracy': acc_prophet, 'f1': f1_prophet}
-        mlflow.log_metrics({"accuracy_prophet": acc_prophet, "f1_prophet": f1_prophet})
-
-
-    try:
-        mlflow.sklearn.log_model(xgb, "xgboost_model")
-        print("XGBoost model logged")
-    except Exception as e:
-        print(f"Failed to log XGBoost model: {e}")
-
-    try:
-        mlflow.sklearn.log_model(rf, "randomforest_model")
-        print("RandomForest model logged")
-    except Exception as e:
-        print(f"Failed to log RandomForest model: {e}")
-
-    try:
-        mlflow.prophet.log_model(prophet, "prophet_model")
-        print("Prophet model logged")
-    except Exception as e:
-        print(f"Failed to log Prophet model: {e}")
-
-    # ────────────────────────────────────────────────
-    # Summary Table
-    # ────────────────────────────────────────────────
-    print("\n" + "="*60)
-    print("Model Comparison Results")
-    print("-"*60)
-    print(f"{'Model':<15} {'Accuracy':<12} {'F1-Score':<12} {'Winner'}")
-    print("-"*60)
-    for model, scores in results.items():
-        is_best = "★ BEST" if model == best_model_name else ""
-        print(f"{model:<15} {scores['accuracy']:.4f}      {scores['f1']:.4f}      {is_best}")
-    print("="*60)
-
-    print(f"\nBest model: {best_model_name} (F1 = {best_f1:.4f})")
-    print(f"Run ID: {best_run_id}")
-    print(f"View in MLflow: http://localhost:5000/#/experiments/0/runs/{best_run_id}")
-
-    return results, best_model_name, best_run_id
-
-# ────────────────────────────────────────────────
-# Run
-# ────────────────────────────────────────────────
 
 if __name__ == "__main__":
     try:
-        results, best_model, best_run = train_and_compare()
+        run_training()
+        print("\nFinished. View in MLflow: http://localhost:5000")
     except Exception as e:
-        print(f"Training failed: {e}")
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
