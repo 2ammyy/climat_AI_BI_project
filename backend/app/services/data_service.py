@@ -165,7 +165,7 @@ def preprocess_data(historical_path, scraped_path, output_path='data/merged_prep
 
     return train_df, test_df
 
-# Run in main.py or notebook
+
 if __name__ == "__main__":
     historical_path = r"backend\data\historical\combined_historical_data.csv"
     scraped_path = r"backend\data\scrapped\scrapped_data\thousand_records\weather_1000plus_20260204_230100.csv"

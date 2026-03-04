@@ -1,0 +1,14 @@
+artifact_uri: file:///C:/Users/VICTUS/ai_bi_project/climat_AI_BI_project/mlruns/0/abc6bc4022a84ae18199c7bf62651be5/artifacts
+end_time: 1771880765405
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: abc6bc4022a84ae18199c7bf62651be5
+run_name: WeatherGuard_3M_pos0.049
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1771880749410
+status: 3
+tags: []
+user_id: VICTUS

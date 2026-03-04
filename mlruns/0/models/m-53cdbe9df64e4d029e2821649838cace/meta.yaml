@@ -1,0 +1,10 @@
+artifact_location: file:///C:/Users/VICTUS/ai_bi_project/climat_AI_BI_project/mlruns/0/models/m-53cdbe9df64e4d029e2821649838cace/artifacts
+creation_timestamp: 1771880804973
+experiment_id: '0'
+last_updated_timestamp: 1771880808731
+model_id: m-53cdbe9df64e4d029e2821649838cace
+model_type: null
+name: lightgbm_model
+source_run_id: c3a43e9b940d43d4ab892a3b34ae3d42
+status: 2
+status_message: null

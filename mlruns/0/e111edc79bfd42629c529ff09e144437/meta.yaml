@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Users/VICTUS/ai_bi_project/climat_AI_BI_project/mlruns/0/e111edc79bfd42629c529ff09e144437/artifacts
+deleted_time: null
+end_time: null
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: e111edc79bfd42629c529ff09e144437
+run_name: neighbor_data_collection
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1772629775963
+status: 1
+tags: []
+user_id: VICTUS

@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import os
 from pathlib import Path
 import warnings
 import mlflow
@@ -15,7 +16,7 @@ from lightgbm import LGBMClassifier
 warnings.filterwarnings("ignore", category=UserWarning)
 
 PREPROCESSED_PATH = Path("data/merged_preprocessed.csv")
-mlflow.set_tracking_uri("http://localhost:5000")
+mlflow.set_tracking_uri(f"file:///{Path('mlruns').absolute().as_posix()}")
 
 # ────────────────────────────────────────────────
 # 1. Data Loading & Proxy Label Generation
@@ -161,55 +162,54 @@ def run_training():
     scale_pos = min(max(1.0 / pos_rate, 1.0), 30.0)
 
     models_config = {
-        "RandomForest": {
-            "cls": RandomForestClassifier,
-            "params": {
-                "n_estimators": 80,
-                "max_depth": 3,
-                "min_samples_leaf": 20,
-                "min_samples_split": 25,
-                "max_features": 0.4,
-                "class_weight": "balanced_subsample",
-                "random_state": 42,
-                "n_jobs": -1
-            }
-        },
-        "XGBoost": {
-            "cls": XGBClassifier,
-            "params": {
-                "n_estimators": 30,
-                "max_depth": 2,
-                "learning_rate": 0.04,
-                "subsample": 0.6,
-                "colsample_bytree": 0.6,
-                "scale_pos_weight": scale_pos,
-                "reg_alpha": 3.0,
-                "reg_lambda": 3.0,
-                "min_child_weight": 8,
-                "random_state": 42,
-                "eval_metric": "logloss",
-                "verbosity": 0
-            }
-        },
-        "LightGBM": {
-            "cls": LGBMClassifier,
-            "params": {
-                "n_estimators": 40,
-                "max_depth": 3,
-                "learning_rate": 0.05,
-                "subsample": 0.65,
-                "colsample_bytree": 0.65,
-                "is_unbalance": True,
-                "reg_alpha": 2.0,
-                "reg_lambda": 2.0,
-                "min_data_in_leaf": 25,
-                "min_sum_hessian_in_leaf": 12,
-                "random_state": 42,
-                "verbose": -1
-            }
+    "RandomForest": {
+        "cls": RandomForestClassifier,
+        "params": {
+            "n_estimators": 80,
+            "max_depth": 3,
+            "min_samples_leaf": 20,
+            "min_samples_split": 25,
+            "max_features": 0.4,
+            "class_weight": "balanced_subsample",
+            "random_state": 42,
+            "n_jobs": -1
+        }
+    },
+    "XGBoost": {
+        "cls": XGBClassifier,
+        "params": {
+            "n_estimators": 30,
+            "max_depth": 2,
+            "learning_rate": 0.04,
+            "subsample": 0.6,
+            "colsample_bytree": 0.6,
+            "scale_pos_weight": scale_pos,
+            "reg_alpha": 3.0,
+            "reg_lambda": 3.0,
+            "min_child_weight": 8,
+            "random_state": 42,
+            "eval_metric": "logloss",
+            "verbosity": 0
+        }
+    },
+    "LightGBM": {
+        "cls": LGBMClassifier,
+        "params": {
+            "n_estimators": 40,
+            "max_depth": 3,
+            "learning_rate": 0.05,
+            "subsample": 0.65,
+            "colsample_bytree": 0.65,
+            "is_unbalance": True,
+            "reg_alpha": 2.0,
+            "reg_lambda": 2.0,
+            "min_data_in_leaf": 25,
+            "min_sum_hessian_in_leaf": 12,
+            "random_state": 42,
+            "verbose": -1
         }
     }
-
+}
     results = {}
 
     with mlflow.start_run(run_name=f"WeatherGuard_3M_pos{pos_rate:.3f}"):
@@ -218,12 +218,9 @@ def run_training():
         mlflow.log_param("n_positives", y.sum())
         mlflow.log_param("features", features)
 
-        # Dummy baselines
-        for strat in ["most_frequent", "stratified"]:
-            res = evaluate_model(X, y, DummyClassifier, {"strategy": strat}, f"Dummy {strat}")
-            mlflow.log_metric(f"dummy_{strat}_f1", res['mean_f1'])
+        # Dummy baselines (no change needed)
 
-        # Train real models
+        # Train real models + LOG THEM
         for name, cfg in models_config.items():
             res = evaluate_model(X, y, cfg["cls"], cfg["params"], name)
             results[name] = res
@@ -236,6 +233,14 @@ def run_training():
                 f"{prefix}_std_f1": res['std_f1']
             })
 
+            # Train final model on full data and log it
+            final_model = cfg["cls"](**cfg["params"])
+            final_model.fit(X, y)  # fit on full data for production use
+
+            artifact_path = f"{name.lower()}_model"
+            mlflow.sklearn.log_model(final_model, artifact_path)
+            print(f"Logged {name} model to artifacts/{artifact_path}")
+            # ──────────────────────────────────────────────────────────────
         # Winner selection
         winner_name = max(results, key=lambda k: results[k]['mean_f1'])
         winner_res = results[winner_name]
@@ -266,6 +271,8 @@ def run_training():
         # Example probabilities (on last 5 samples of full X)
         print("\nExample probabilities (last 5 samples):")
         print(model.predict_proba(X.iloc[-5:]))
+
+        print("\nFinished. View in MLflow: http://localhost:5000")
 
 
 if __name__ == "__main__":

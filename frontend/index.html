@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <!doctype html>
 <html lang="en">
   <head>
@@ -12,3 +13,63 @@
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
+=======
+<!-- frontend/index.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WeatherGuardTN</title>
+    <style>
+        body { font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px; }
+        .risk-green { color: green; } .risk-yellow { color: #b8860b; }
+        .risk-orange { color: orange; } .risk-red { color: red; }
+        input { width: 100%; padding: 8px; margin: 5px 0; }
+        button { background: #4CAF50; color: white; padding: 10px; border: none; width: 100%; }
+        #result { margin-top: 20px; padding: 20px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🌤️ WeatherGuardTN</h1>
+    <form id="weatherForm">
+        <input type="text" id="city" placeholder="City" value="Tunis" required>
+        <input type="number" id="temp_max" placeholder="Max Temp (°C)" value="38" required>
+        <input type="number" id="temp_min" placeholder="Min Temp (°C)" value="24" required>
+        <input type="number" id="wind_speed" placeholder="Wind Speed (km/h)" value="20" required>
+        <button type="submit">Predict Risk</button>
+    </form>
+    <div id="result"></div>
+
+    <script>
+        document.getElementById('weatherForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const data = {
+                temp_max: parseFloat(document.getElementById('temp_max').value),
+                temp_min: parseFloat(document.getElementById('temp_min').value),
+                temp_avg: (parseFloat(document.getElementById('temp_max').value) + 
+                          parseFloat(document.getElementById('temp_min').value)) / 2,
+                wind_speed: parseFloat(document.getElementById('wind_speed').value),
+                humidity: 60,
+                city: document.getElementById('city').value
+            };
+            
+            const response = await fetch('http://localhost:8000/predict', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            });
+            
+            const result = await response.json();
+            const colors = {GREEN: 'green', YELLOW: '#b8860b', ORANGE: 'orange', RED: 'red', PURPLE: 'purple'};
+            
+            document.getElementById('result').innerHTML = `
+                <div style="background: ${colors[result.risk_level]}; color: white; padding: 20px;">
+                    <h2>${result.risk_level}</h2>
+                    <p>Confidence: ${result.confidence}%</p>
+                    <p>City: ${result.city}</p>
+                </div>
+            `;
+        };
+    </script>
+</body>
+</html>
+>>>>>>> amiraBranch

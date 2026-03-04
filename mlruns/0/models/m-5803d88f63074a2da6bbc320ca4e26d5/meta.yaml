@@ -1,0 +1,10 @@
+artifact_location: file:///C:/Users/VICTUS/ai_bi_project/climat_AI_BI_project/mlruns/0/models/m-5803d88f63074a2da6bbc320ca4e26d5/artifacts
+creation_timestamp: 1771880756876
+experiment_id: '0'
+last_updated_timestamp: 1771880760096
+model_id: m-5803d88f63074a2da6bbc320ca4e26d5
+model_type: null
+name: xgboost_model
+source_run_id: abc6bc4022a84ae18199c7bf62651be5
+status: 2
+status_message: null

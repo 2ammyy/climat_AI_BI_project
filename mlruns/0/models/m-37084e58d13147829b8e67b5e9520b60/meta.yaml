@@ -1,0 +1,10 @@
+artifact_location: file:///C:/Users/VICTUS/ai_bi_project/climat_AI_BI_project/mlruns/0/models/m-37084e58d13147829b8e67b5e9520b60/artifacts
+creation_timestamp: 1771880750883
+experiment_id: '0'
+last_updated_timestamp: 1771880754648
+model_id: m-37084e58d13147829b8e67b5e9520b60
+model_type: null
+name: randomforest_model
+source_run_id: abc6bc4022a84ae18199c7bf62651be5
+status: 2
+status_message: null
