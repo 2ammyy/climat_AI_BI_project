@@ -1,0 +1,23 @@
+artifact_path: file:C:/Users/VICTUS/ai_bi_project/climat_AI_BI_project/mlruns/2/models/m-cacbc4f7d0414c82b387526fadbe9ef0/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.14.3
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.8.0
+    skops_trusted_types: null
+mlflow_version: 3.9.0
+model_id: m-cacbc4f7d0414c82b387526fadbe9ef0
+model_size_bytes: 1833470
+model_uuid: m-cacbc4f7d0414c82b387526fadbe9ef0
+prompts: null
+run_id: 52435ad9229548719929e07dbbc88685
+utc_time_created: '2026-03-04 13:14:02.961427'

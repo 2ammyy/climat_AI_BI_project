@@ -434,3 +434,68 @@ def test_prediction():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+@app.post("/forecast-with-neighbors")
+async def forecast_with_neighbors(request: DateForecastRequest):
+    """
+    Get forecast with neighbor country influence analysis
+    """
+    try:
+        # First get the regular forecast
+        base_forecast = await forecast_by_date(request)
+        
+        # Load latest neighbor data
+        neighbor_df = pd.read_csv('data/neighbor_data/neighbor_weather_latest.csv')
+        
+        # Determine region and influences
+        region_map = {gov: region for region, govs in influence_zones.items() 
+                     for gov in govs}
+        region = region_map.get(request.city, 'central')
+        
+        # Get neighbor influences
+        influences = []
+        if region in ['northwest', 'central']:
+            algeria_data = neighbor_df[neighbor_df['country']=='algeria'].iloc[0]
+            influences.append({
+                'country': 'Algeria',
+                'temperature': algeria_data['temperature'],
+                'wind_speed': algeria_data['wind_speed'],
+                'influence_level': 'High' if region == 'northwest' else 'Medium'
+            })
+        
+        if region in ['southwest', 'southeast']:
+            libya_data = neighbor_df[neighbor_df['country']=='libya'].iloc[0]
+            influences.append({
+                'country': 'Libya',
+                'temperature': libya_data['temperature'],
+                'wind_speed': libya_data['wind_speed'],
+                'influence_level': 'High' if region == 'southwest' else 'Medium'
+            })
+        
+        if region in ['northeast', 'coastal']:
+            italy_data = neighbor_df[neighbor_df['country']=='italy'].iloc[0]
+            malta_data = neighbor_df[neighbor_df['country']=='malta'].iloc[0]
+            influences.append({
+                'country': 'Italy',
+                'temperature': italy_data['temperature'],
+                'wind_speed': italy_data['wind_speed'],
+                'influence_level': 'Medium'
+            })
+            influences.append({
+                'country': 'Malta',
+                'temperature': malta_data['temperature'],
+                'wind_speed': malta_data['wind_speed'],
+                'influence_level': 'Medium'
+            })
+        
+        # Add neighbor analysis to response
+        base_forecast['neighbor_influences'] = influences
+        base_forecast['region'] = region
+        
+        return base_forecast
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return await forecast_by_date(request)  # Fallback to regular forecast
