@@ -25,42 +25,69 @@ function App() {
   const [mapData, setMapData] = useState(null);
   const [loadingMap, setLoadingMap] = useState(false);
 
-  // Move possibleUrls inside useMemo to prevent recreation on every render
-  const possibleUrls = useMemo(() => [
-    'http://127.0.0.1:8000',
-    'http://localhost:8000'
-  ], []);
+  // URLs à tester pour la connexion à l'API
+  const possibleUrls = useMemo(() => {
+    // Récupérer l'URL depuis les variables d'environnement
+    const envUrl = process.env.REACT_APP_API_URL;
+    console.log('🔍 REACT_APP_API_URL from env:', envUrl);
+    
+    const urls = [];
+    
+    // Ajouter l'URL du .env en premier (priorité)
+    if (envUrl) {
+      urls.push(envUrl);
+    }
+    
+    // Ajouter les URLs de fallback avec le nouveau port 8001
+    urls.push(
+      'http://localhost:8001',
+      'http://127.0.0.1:8001',
+      'http://localhost:8000',  // Ancien port (fallback)
+      'http://127.0.0.1:8000'    // Ancien port (fallback)
+    );
+    
+    // Supprimer les doublons
+    const uniqueUrls = [...new Set(urls)];
+    console.log('🔍 URLs to try:', uniqueUrls);
+    return uniqueUrls;
+  }, []);
 
-  // Define functions with useCallback
+  // Fonction pour trouver l'URL de l'API qui fonctionne
   const findWorkingApiUrl = useCallback(async () => {
     console.log('🔍 Starting API connection check...');
+    
     for (const url of possibleUrls) {
       try {
         console.log(`🔍 Trying to connect to ${url}/health...`);
-        const response = await axios.get(`${url}/health`, { timeout: 2000 });
+        const response = await axios.get(`${url}/health`, { 
+          timeout: 3000  // Augmenté à 3 secondes
+        });
         
         if (response.status === 200) {
           console.log(`✅ Connected to ${url}`);
           console.log('✅ Response data:', response.data);
           setApiUrl(url);
           setApiStatus('connected');
-          return;
+          return url;
         }
       } catch (err) {
         console.log(`❌ Failed to connect to ${url}:`, err.message);
       }
     }
+    
     console.log('❌ All connection attempts failed');
     setApiStatus('disconnected');
+    return null;
   }, [possibleUrls]);
 
+  // Fonction pour récupérer la liste des gouvernorats
   const fetchGovernorates = useCallback(async () => {
     if (!apiUrl) return;
     
     try {
-      console.log('📥 Fetching governorates from:', `${apiUrl}/governorates`);
-      const response = await axios.get(`${apiUrl}/governorates`);
-      setGovernorates(response.data.governorates);
+      console.log('📥 Fetching governorates from:', `${apiUrl}/api/governorates`);
+      const response = await axios.get(`${apiUrl}/api/governorates`);
+      setGovernorates(response.data.governorates || response.data);
     } catch (err) {
       console.error('Error fetching governorates:', err);
       // Fallback governorates
@@ -73,19 +100,20 @@ function App() {
     }
   }, [apiUrl]);
 
+  // Fonction pour récupérer les informations sur les risques
   const fetchRiskInfo = useCallback(async () => {
     if (!apiUrl) return;
     
     try {
-      console.log('📥 Fetching risk info from:', `${apiUrl}/risk-info`);
-      const response = await axios.get(`${apiUrl}/risk-info`);
+      console.log('📥 Fetching risk info from:', `${apiUrl}/api/risk-info`);
+      const response = await axios.get(`${apiUrl}/api/risk-info`);
       setRiskInfo(response.data);
     } catch (err) {
       console.error('Error fetching risk info:', err);
     }
   }, [apiUrl]);
 
-  // Generate dynamic map data
+  // Générer des données de carte simulées
   const generateMapData = useCallback(() => {
     const governorateList = [
       "Tunis", "Ariana", "Ben Arous", "Manouba", "Nabeul", "Zaghouan",
@@ -145,11 +173,10 @@ function App() {
     setPrediction(null);
     
     try {
-      console.log('📤 Sending request to /forecast-by-date:', forecastData);
-      console.log('📤 Full URL:', `${apiUrl}/forecast-by-date`);
+      console.log('📤 Sending request to /api/forecast-by-date:', forecastData);
+      console.log('📤 Full URL:', `${apiUrl}/api/forecast-by-date`);
       
-      // Use ONLY the endpoint that exists in your backend
-      const response = await axios.post(`${apiUrl}/forecast-by-date`, {
+      const response = await axios.post(`${apiUrl}/api/forecast-by-date`, {
         date: forecastData.date,
         city: forecastData.city
       });

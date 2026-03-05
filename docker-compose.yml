@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Service MLflow
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.9.2
+    container_name: climate-mlflow
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./mlruns:/mlflow/mlruns
+      - ./mlartifacts:/mlflow/mlartifacts
+      - mlflow_db:/mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow/mlflow.db
+      --default-artifact-root /mlflow/mlartifacts
+      --serve-artifacts
+    networks:
+      - climate-network
+    restart: unless-stopped
+
+  # Service Backend
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: climate-backend
+    ports:
+      - "8001:8000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+    volumes:
+      - ./backend:/app
+      - ./data:/data
+      - ./mlruns:/mlruns
+      - ./mlartifacts:/mlartifacts
+    depends_on:
+      - mlflow
+    networks:
+      - climate-network
+    restart: unless-stopped
+
+  # Service Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: climate-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - climate-network
+    restart: unless-stopped
+
+networks:
+  climate-network:
+    driver: bridge
+
+volumes:
+  mlflow_db:
